@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Carte des Établissements Scolaires de Paris</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; }
+    #map { height: 100vh; }
+    .search-container {
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+      display: flex;
+      gap: 10px;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .search-input {
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      width: 300px;
+    }
+    .filter-button {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      background: #f0f0f0;
+    }
+    .filter-button.active {
+      background: #2563eb;
+      color: white;
+    }
+    .legend {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      background: white;
+      padding: 10px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      z-index: 1000;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 5px 0;
+    }
+    .legend-color {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+    }
+  </style>
+</head>
+<body>
+  <div class="search-container">
+    <input type="text" class="search-input" placeholder="Rechercher un établissement...">
+    <button class="filter-button active" data-filter="all">Tous</button>
+    <button class="filter-button" data-filter="college">Collèges</button>
+    <button class="filter-button" data-filter="lycee">Lycées</button>
+  </div>
+
+  <div class="legend">
+    <h4 style="margin-bottom: 8px; font-weight: 600;">Légende</h4>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #2563eb;"></div>
+      <span>Collège (à faire)</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #dc2626;"></div>
+      <span>Lycée (à faire)</span>
+    </div>
+    <div class="legend-item">
+      <div class="legend-color" style="background: #16a34a;"></div>
+      <span>Établissement fait</span>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <script>
+    const map = L.map('map').setView([48.8566, 2.3522], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    }).addTo(map);
+
+    let schools = [];
+    let currentFilter = 'all';
+    let searchTerm = '';
+    const schoolStatus = JSON.parse(localStorage.getItem('schoolStatus') || '{}');
+
+    const blueIcon = L.icon({
+      iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-blue.png',
+      iconSize: [25, 41],
+      iconAnchor: [12, 41]
+    });
+
+    const redIcon = L.icon({
+      iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+      iconSize: [25, 41],
+      iconAnchor: [12, 41]
+    });
+
+    const greenIcon = L.icon({
+      iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+      iconSize: [25, 41],
+      iconAnchor: [12, 41]
+    });
+
+    async function loadSchools() {
+      try {
+        const [colleges, lycees] = await Promise.all([
+          fetch('/data/etablissements-scolaires-colleges.json').then(res => res.json()),
+          fetch('/data/lycees-donnees-generales.json').then(res => res.json())
+        ]);
+
+        schools = [
+          ...colleges.map(c => ({ ...c, type: 'Collège' })),
+          ...lycees.map(l => ({ ...l, type: 'Lycée' }))
+        ];
+        updateMarkers();
+      } catch (error) {
+        console.error('Error loading schools:', error);
+      }
+    }
+
+    function toggleStatus(id) {
+      schoolStatus[id] = !schoolStatus[id];
+      localStorage.setItem('schoolStatus', JSON.stringify(schoolStatus));
+      updateMarkers();
+    }
+
+    function updateMarkers() {
+      map.eachLayer((layer) => {
+        if (layer instanceof L.Marker) {
+          map.removeLayer(layer);
+        }
+      });
+
+      schools
+        .filter(school => {
+          const matchesFilter = 
+            currentFilter === 'all' || 
+            (currentFilter === 'college' && school.type === 'Collège') ||
+            (currentFilter === 'lycee' && school.type === 'Lycée');
+
+          const matchesSearch = 
+            school.nom.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            school.adresse.toLowerCase().includes(searchTerm.toLowerCase());
+
+          return matchesFilter && matchesSearch;
+        })
+        .forEach(school => {
+          const marker = L.marker(
+            [school.latitude, school.longitude],
+            { icon: schoolStatus[school.id] ? greenIcon : school.type === 'Collège' ? blueIcon : redIcon }
+          );
+
+          marker.bindPopup(`
+            <div style="min-width: 200px;">
+              <h3 style="font-weight: 600; margin-bottom: 8px;">${school.nom}</h3>
+              <p style="color: #666; margin-bottom: 12px;">${school.adresse}</p>
+              <button 
+                onclick="toggleStatus('${school.id}')"
+                style="
+                  width: 100%;
+                  padding: 8px;
+                  border: none;
+                  border-radius: 4px;
+                  color: white;
+                  cursor: pointer;
+                  background: ${schoolStatus[school.id] ? '#ea580c' : '#16a34a'};
+                "
+              >
+                ${schoolStatus[school.id] ? 'Marquer comme à faire' : 'Marquer comme fait'}
+              </button>
+            </div>
+          `);
+
+          marker.addTo(map);
+        });
+    }
+
+    document.querySelector('.search-input').addEventListener('input', (e) => {
+      searchTerm = e.target.value;
+      updateMarkers();
+    });
+
+    document.querySelectorAll('.filter-button').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.filter-button').forEach(btn => btn.classList.remove('active'));
+        button.classList.add('active');
+        currentFilter = button.dataset.filter;
+        updateMarkers();
+      });
+    });
+
+    loadSchools();
+  </script>
+</body>
+</html>
